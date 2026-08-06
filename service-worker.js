@@ -1,5 +1,5 @@
 /* service-worker.js — Offline cache for the mind map */
-const CACHE = "mindmap-v1";
+const CACHE = "mindmap-v2";
 const ASSETS = [
   "./",
   "./index.html",
