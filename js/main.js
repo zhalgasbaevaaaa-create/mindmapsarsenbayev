@@ -27,6 +27,11 @@ const toastEl     = $("#toast");
 const welcome     = $("#welcome");
 
 /* ---------- State ---------- */
+/* Minimum/maximum allowed scale. We allow down to 0.05 so that
+   the entire 100+ node tree can be made to fit on a single screen. */
+const SCALE_MIN = 0.05;
+const SCALE_MAX = 2.5;
+
 const state = {
   scale: 1,
   tx: 0,
@@ -34,7 +39,7 @@ const state = {
   dragging: false,
   dragStartX: 0,
   dragStartY: 0,
-  expanded: new Set(["1", "1.1", "1.2", "1.3", "1.4"]),  // open root + 4 main branches by default
+  expanded: new Set(["1", "1.1", "1.2", "1.3", "1.4", "1.4.5"]),  // open root + 4 main branches + new branch by default
   selected: null,         // currently selected node id
   activePath: new Set(), // highlighted path
   panning: false,         // middle/right-button drag for panning
@@ -56,56 +61,82 @@ function buildSubtree(id, depth = 0) {
   return { id, depth, height: children.length, children };
 }
 
-/* Assigns x/y for each node id based on its subtree.
-   Root: (0, 0). Children spread vertically; each child is centred on the
-   y-range of its own descendants. */
+/* Assigns x/y for each node id using a horizontal mind-map layout.
+
+   For the root, L1 children are laid out across two columns:
+   one to the right of the root, one to the left. For deeper
+   levels, the L1 ancestor's horizontal direction determines
+   where its descendants go (right of root → children to the
+   right; left of root → children to the left).
+
+   Within a column, sibling subtrees are placed one above the
+   other, centred on the y-extent of the subtree. */
 function layoutTree() {
   positions.clear();
   const root = MINDMAP.root;
-  // Total height = max descendant depth used for the root's "spread".
-  const totalH = computeHeight("1");
-  const W = 380; // horizontal distance between levels
-  const V = 100; // vertical distance between siblings
-  placeNode("1", 0, 0, W, V, 0, totalH);
-}
+  const H_GAP = 320;   // horizontal distance from a parent to its column
+  const V_GAP = 24;    // vertical gap between siblings in a column
+  const SUBTREE_BASE = 28; // min vertical unit per subtree
+  if (!root) return;
 
-function computeHeight(id) {
-  const n = MINDMAP[id];
-  if (!n || !n.children || n.children.length === 0) return 1;
-  let h = 0;
-  for (const c of n.children) h += computeHeight(c);
-  return Math.max(1, h);
-}
+  // Split L1 children between right and left columns.
+  const l1 = root.children || [];
+  const half = Math.ceil(l1.length / 2);
+  const rightL1 = l1.slice(0, half);
+  const leftL1  = l1.slice(half);
 
-function placeNode(id, x, yTop, dx, dy, yOffset, totalH) {
-  // totalH is the height of the parent's subtree (used to centre this node)
-  const node = MINDMAP[id];
-  if (!node) return;
-  const childCount = (node.children || []).length;
-  const isLeaf = childCount === 0;
-  const subH = isLeaf ? 1 : computeHeight(id);
+  // Subtree height (in V units) for a node — used for vertical spacing.
+  const subHeight = (id) => {
+    const n = MINDMAP[id];
+    if (!n || !n.children || n.children.length === 0) return SUBTREE_BASE;
+    let total = 0;
+    for (const c of n.children) total += subHeight(c);
+    return Math.max(SUBTREE_BASE, total + V_GAP * (n.children.length - 1));
+  };
 
-  if (isLeaf) {
-    const cy = yTop + dy * (yOffset + 0.5);
-    positions.set(id, { x, y: cy });
-    return;
-  }
+  // Place a list of L1 children in a column to the right (sign = +1)
+  // or left (sign = -1) of the root. Returns the total height used.
+  const placeColumn = (ids, sign) => {
+    const subtreeHeights = ids.map(subHeight);
+    const total = subtreeHeights.reduce((a, b) => a + b, 0) + V_GAP * Math.max(0, ids.length - 1);
+    let yCursor = -total / 2;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const sh = subtreeHeights[i];
+      const yCentre = yCursor + sh / 2;
+      positions.set(id, { x: sign * H_GAP, y: yCentre });
+      // Recurse into this L1's children
+      placeSubtree(id, sign * 2 * H_GAP, yCentre - sh / 2, sh, sign);
+      yCursor += sh + V_GAP;
+    }
+  };
 
-  // First place children to compute their y-centres
-  let childY = yOffset;
-  const childCentres = [];
-  for (const cid of node.children) {
-    const ch = computeHeight(cid);
-    const childCentre = childY + ch / 2;
-    childCentres.push(childCentre);
-    placeNode(cid, x + dx, yTop, dx, dy, childY, ch);
-    childY += ch;
-  }
-  // Centre this node on the children's centre range
-  const firstCentre = childCentres[0];
-  const lastCentre  = childCentres[childCentres.length - 1];
-  const myCentre = (firstCentre + lastCentre) / 2;
-  positions.set(id, { x, y: yTop + dy * myCentre });
+  // Recursive subtree placement: pack all children of `id` in a column
+  // starting at (x0, y0) with the given column height.
+  const placeSubtree = (id, x0, y0, columnHeight, sign) => {
+    const n = MINDMAP[id];
+    if (!n || !n.children || !n.children.length) return;
+    const children = n.children;
+    const subHs = children.map(subHeight);
+    const total = subHs.reduce((a, b) => a + b, 0) + V_GAP * Math.max(0, children.length - 1);
+    // If children are too tall, scale them down within columnHeight.
+    const yScale = total > columnHeight ? columnHeight / total : 1;
+    let yCursor = y0 + (columnHeight - total * yScale) / 2;
+    for (let i = 0; i < children.length; i++) {
+      const cid = children[i];
+      const sh = subHs[i] * yScale;
+      const yCentre = yCursor + sh / 2;
+      positions.set(cid, { x: x0, y: yCentre });
+      // Recurse further
+      placeSubtree(cid, x0 + sign * H_GAP, yCursor, sh, sign);
+      yCursor += sh + V_GAP * yScale;
+    }
+  };
+
+  // Place root at origin
+  positions.set("1", { x: 0, y: 0 });
+  placeColumn(rightL1, +1);
+  placeColumn(leftL1, -1);
 }
 
 /* ---------- Build DOM ---------- */
@@ -196,13 +227,41 @@ function expandAll() {
     if (k !== "meta" && MINDMAP[k]?.children?.length) state.expanded.add(k);
   }
   applyVisibility();
-  toast("Барлық тармақтар ашылды", "success");
+  // Fit the entire tree into the viewport so the user truly sees
+  // everything on one screen. The scale is allowed to go down to
+  // SCALE_MIN (0.05) so even 100+ nodes fit. They can then click
+  // any node to zoom in on it.
+  fitToScreen();
+  updateMinimap();
+  toast("Барлығы бір экранға сыйды — тармақты басып, үлкейтіңіз", "success");
 }
 function collapseAll() {
   state.expanded.clear();
   state.expanded.add("1");
   applyVisibility();
+  fitToScreen();
+  updateMinimap();
   toast("Барлық тармақтар жабылды", "success");
+}
+
+/* Fit any set of points into the viewport. */
+function fitToView(pts) {
+  pts = [...pts];
+  if (!pts.length) return;
+  const NODE_W = 200, NODE_H = 60, padding = 40;
+  const minX = Math.min(...pts.map((p) => p.x)) - NODE_W / 2 - padding;
+  const maxX = Math.max(...pts.map((p) => p.x)) + NODE_W / 2 + padding;
+  const minY = Math.min(...pts.map((p) => p.y)) - NODE_H / 2 - padding;
+  const maxY = Math.max(...pts.map((p) => p.y)) + NODE_H / 2 + padding;
+  const w = canvasWrap.clientWidth;
+  const h = canvasWrap.clientHeight;
+  if (w <= 0 || h <= 0) return;
+  const scale = clamp(Math.min(w / (maxX - minX), h / (maxY - minY)), SCALE_MIN, SCALE_MAX);
+  state.scale = scale;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  state.tx = w / 2 - cx * scale;
+  state.ty = h / 2 - cy * scale;
+  applyTransform();
 }
 
 function onNodeClick(id) {
@@ -215,6 +274,14 @@ function onNodeClick(id) {
   }
   // Always show detail
   showDetail(id);
+  // If the user clicked a node while we were zoomed-out
+  // (e.g. just after "Fit all"), zoom-in on the clicked node
+  // so it becomes readable. We do this only if the current
+  // scale is too small (< 0.5) so we don't disrupt the
+  // normal zoom level during exploration.
+  if (state.scale < 0.5) {
+    focusOnNode(id, 0.9);
+  }
 }
 
 /* ---------- Detail panel ---------- */
@@ -276,11 +343,16 @@ function highlightActive() {
   });
 }
 
-function focusOnNode(id) {
+function focusOnNode(id, targetScale) {
   const pos = positions.get(id);
   if (!pos) return;
   const w = canvasWrap.clientWidth;
   const h = canvasWrap.clientHeight;
+  // If a target scale is provided, jump to it. Otherwise keep the
+  // current scale.
+  if (typeof targetScale === "number") {
+    state.scale = clamp(targetScale, SCALE_MIN, SCALE_MAX);
+  }
   // Centre the node in the viewport
   state.tx = w / 2 - pos.x * state.scale;
   state.ty = h / 2 - pos.y * state.scale;
@@ -339,7 +411,7 @@ canvasWrap.addEventListener("wheel", (e) => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
   const delta = -e.deltaY * 0.0015;
-  const newScale = clamp(state.scale * (1 + delta), 0.3, 2.5);
+  const newScale = clamp(state.scale * (1 + delta), SCALE_MIN, SCALE_MAX);
   // Keep the mouse position fixed
   const wx = (mx - state.tx) / state.scale;
   const wy = (my - state.ty) / state.scale;
@@ -388,7 +460,7 @@ canvasWrap.addEventListener("touchmove", (e) => {
     const dx = e.touches[0].clientX - e.touches[1].clientX;
     const dy = e.touches[0].clientY - e.touches[1].clientY;
     const d = Math.hypot(dx, dy);
-    const newScale = clamp(state.pinching.scale * (d / state.pinching.dist), 0.3, 2.5);
+    const newScale = clamp(state.pinching.scale * (d / state.pinching.dist), SCALE_MIN, SCALE_MAX);
     state.scale = newScale;
     applyTransform();
     updateMinimap();
@@ -517,18 +589,12 @@ $("#btn-collapse").addEventListener("click", collapseAll);
 $("#btn-zoom-in").addEventListener("click", () => zoomBy(1.2));
 $("#btn-zoom-out").addEventListener("click", () => zoomBy(1 / 1.2));
 $("#btn-zoom-reset").addEventListener("click", () => {
-  state.scale = 1;
-  // Centre the root
-  const root = positions.get("1");
-  if (root) {
-    state.tx = canvasWrap.clientWidth / 2 - root.x;
-    state.ty = canvasWrap.clientHeight / 2 - root.y;
-  } else {
-    state.tx = state.ty = 0;
-  }
-  applyTransform();
-  updateMinimap();
-  toast("Масштаб қалпына келтірілді");
+  fitToScreen();
+  toast("Барлығы бір экранға сыйды");
+});
+$("#btn-fit").addEventListener("click", () => {
+  fitToScreen();
+  toast("Барлығы бір экранға сыйды");
 });
 $("#btn-fullscreen").addEventListener("click", () => {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
@@ -548,18 +614,18 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "+" || e.key === "=") zoomBy(1.2);
   if (e.key === "-" || e.key === "_") zoomBy(1 / 1.2);
-  if (e.key === "0") $("#btn-zoom-reset").click();
+  if (e.key === "0") fitToScreen(), toast("Барлығы бір экранға сыйды");
 });
 $("#detail-close").addEventListener("click", closeDetail);
 
 function zoomBy(factor) {
-  state.scale = clamp(state.scale * factor, 0.3, 2.5);
+  state.scale = clamp(state.scale * factor, SCALE_MIN, SCALE_MAX);
   // Zoom around centre
   const w = canvasWrap.clientWidth, h = canvasWrap.clientHeight;
   const cx = w / 2, cy = h / 2;
   const wx = (cx - state.tx) / state.scale;
   const wy = (cy - state.ty) / state.scale;
-  state.scale = clamp(state.scale, 0.3, 2.5);
+  state.scale = clamp(state.scale, SCALE_MIN, SCALE_MAX);
   state.tx = cx - wx * state.scale;
   state.ty = cy - wy * state.scale;
   applyTransform();
@@ -743,8 +809,11 @@ function rasterise(svgString, mime, filename) {
 /* ---------- Welcome ---------- */
 $("#welcome-go").addEventListener("click", () => {
   welcome.style.display = "none";
-  // Auto-focus root
-  setTimeout(() => focusOnNode("1"), 100);
+  // Auto-fit everything into the viewport
+  setTimeout(() => {
+    fitToScreen();
+    updateMinimap();
+  }, 100);
 });
 // Click outside dismiss
 welcome.addEventListener("click", (e) => {
@@ -769,17 +838,44 @@ function boot() {
     buildNodes();
     console.log("[mindmap] buildNodes done");
     drawConnectors();
-    // Centre the root node
-    const root = positions.get("1");
-    if (root) {
-      state.tx = canvasWrap.clientWidth / 2 - root.x;
-      state.ty = canvasWrap.clientHeight / 2 - root.y;
-      applyTransform();
-    }
+    // Centre the root node, scaled to fit the viewport
+    fitToScreen();
     updateMinimap();
   } catch (e) {
     console.error("[mindmap] boot error:", e);
   }
+}
+
+/* Fit every currently visible node into the viewport by choosing an
+   appropriate scale and translation. Called on boot, after expand-all,
+   after collapse-all, when the "Fit" button is pressed, and when the
+   user presses "0". The minimum allowed scale is SCALE_MIN so that the
+   whole 100+ node tree can be made to fit on a single screen. */
+function fitToScreen(padding = 50) {
+  // Gather every position that is currently visible.
+  const pts = [];
+  for (const [id, pos] of positions) {
+    if (isNodeVisible(id)) pts.push(pos);
+  }
+  if (!pts.length) return;
+  const NODE_W = 200, NODE_H = 60;
+  const minX = Math.min(...pts.map((p) => p.x)) - NODE_W / 2 - padding;
+  const maxX = Math.max(...pts.map((p) => p.x)) + NODE_W / 2 + padding;
+  const minY = Math.min(...pts.map((p) => p.y)) - NODE_H / 2 - padding;
+  const maxY = Math.max(...pts.map((p) => p.y)) + NODE_H / 2 + padding;
+  const w = canvasWrap.clientWidth;
+  const h = canvasWrap.clientHeight;
+  if (w <= 0 || h <= 0) return;
+  const dx = maxX - minX;
+  const dy = maxY - minY;
+  // Allow scale to go as low as SCALE_MIN so the whole tree fits.
+  const scale = clamp(Math.min(w / dx, h / dy), SCALE_MIN, SCALE_MAX);
+  state.scale = scale;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  state.tx = w / 2 - cx * scale;
+  state.ty = h / 2 - cy * scale;
+  applyTransform();
 }
 
 if (document.readyState === "loading") {
