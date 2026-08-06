@@ -7,6 +7,13 @@
 <title>Қазақ жеріндегі реформалар — Интерактивті Mind Map</title>
 <meta name="description" content="XVIII–XIX ғасырлардағы Ресей империясының Қазақстандағы реформалары. Интерактивті тармақталған схема. ҰБТ/ЖОО бағдарламасына сәйкес." />
 <link rel="manifest" href="manifest.json" />
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    });
+  }
+</script>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
