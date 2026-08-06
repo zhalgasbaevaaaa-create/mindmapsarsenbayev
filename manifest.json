@@ -1,0 +1,15 @@
+{
+  "name": "Қазақ жеріндегі реформалар — Mind Map",
+  "short_name": "Реформалар",
+  "description": "XVIII–XIX ғасырлардағы Ресей империясының Қазақстандағы реформалары. Интерактивті тармақталған схема. ҰБТ/ЖОО бағдарламасына сәйкес.",
+  "lang": "kk",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0e27",
+  "theme_color": "#0F4C81",
+  "icons": [
+    { "src": "assets/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

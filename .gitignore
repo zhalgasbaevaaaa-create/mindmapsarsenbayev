@@ -1,0 +1,18 @@
+# dependencies / build
+node_modules/
+dist/
+build/
+.cache/
+*.log
+.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# local overrides
+config.local.js
+.env
+.env.local

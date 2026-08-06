@@ -1,0 +1,27 @@
+{
+  "name": "kazakhstan-reforms-mindmap",
+  "version": "1.0.0",
+  "description": "XVIII–XIX ғасырлардағы Ресей империясының Қазақстандағы реформалары — Интерактивті Mind Map",
+  "type": "module",
+  "scripts": {
+    "dev": "npx serve -l 8080 .",
+    "start": "npx serve -l 8080 .",
+    "build": "echo 'No build step — pure vanilla HTML/CSS/JS'",
+    "preview": "npx serve -l 8080 ."
+  },
+  "keywords": [
+    "kazakhstan",
+    "history",
+    "mindmap",
+    "education",
+    "reforms",
+    "russian-empire",
+    "interactive",
+    "kk"
+  ],
+  "author": "Arena.ai",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
