@@ -39,7 +39,10 @@ const state = {
   dragging: false,
   dragStartX: 0,
   dragStartY: 0,
-  expanded: new Set(["1", "1.1", "1.2", "1.3", "1.4", "1.4.5"]),  // open root + 4 main branches + new branch by default
+  // We deliberately do NOT include "1" here so that the root's
+  // children stay hidden. The root itself is always shown because
+  // `isVisible` returns true when there is no parent.
+  expanded: new Set(),
   selected: null,         // currently selected node id
   activePath: new Set(), // highlighted path
   panning: false,         // middle/right-button drag for panning
@@ -236,10 +239,12 @@ function expandAll() {
   toast("Барлығы бір экранға сыйды — тармақты басып, үлкейтіңіз", "success");
 }
 function collapseAll() {
+  // Clear all expansions. The root itself is always visible (it
+  // has no parent that can hide it), so we don't need to add "1"
+  // to `state.expanded` — that would re-show its children.
   state.expanded.clear();
-  state.expanded.add("1");
   applyVisibility();
-  fitToScreen();
+  centreRoot();
   updateMinimap();
   toast("Барлық тармақтар жабылды", "success");
 }
@@ -272,16 +277,34 @@ function onNodeClick(id) {
     if (state.expanded.has(id)) collapseNode(id);
     else expandNode(id);
   }
-  // Always show detail
-  showDetail(id);
-  // If the user clicked a node while we were zoomed-out
-  // (e.g. just after "Fit all"), zoom-in on the clicked node
-  // so it becomes readable. We do this only if the current
-  // scale is too small (< 0.5) so we don't disrupt the
-  // normal zoom level during exploration.
-  if (state.scale < 0.5) {
-    focusOnNode(id, 0.9);
+  // Show the detail panel only for non-root nodes. The root
+  // already has its description on the welcome card, and
+  // auto-opening the panel on the very first click gets in
+  // the way of the user just exploring the tree.
+  if (id !== "1") {
+    showDetail(id);
+  } else {
+    // If the detail panel is already open for the root, close
+    // it; otherwise leave it alone.
+    if (state.selected === "1") closeDetail();
   }
+  // Choose a target scale that lets the user see the clicked
+  // node, its parent, and its first row of children. The
+  // deeper the user goes, the smaller the scale becomes.
+  let target;
+  if (state.scale < 0.4) {
+    // We were zoomed-out (e.g. just after "Fit all"). Zoom
+    // in to a comfortable reading level.
+    target = 0.9;
+  } else {
+    const depth = dataDepth(id);
+    // 0 = root, 1 = L1, 2 = L2, 3 = L3
+    if (depth === 0) target = 0.9;       // root → L1 visible
+    else if (depth === 1) target = 0.75;  // L1 → L2 visible
+    else if (depth === 2) target = 0.6;   // L2 → L3 visible
+    else target = 0.5;                    // L3 → L4 visible
+  }
+  focusOnNode(id, target);
 }
 
 /* ---------- Detail panel ---------- */
@@ -809,10 +832,14 @@ function rasterise(svgString, mime, filename) {
 /* ---------- Welcome ---------- */
 $("#welcome-go").addEventListener("click", () => {
   welcome.style.display = "none";
-  // Auto-fit everything into the viewport
+  // Reset to a clean state: only the root is visible. The user
+  // can then click any branch to drill into it.
   setTimeout(() => {
-    fitToScreen();
+    state.expanded = new Set();
+    applyVisibility();
+    centreRoot();
     updateMinimap();
+    toast("Реформалар түйіні — тармақты басып ашыңыз", "success");
   }, 100);
 });
 // Click outside dismiss
@@ -838,12 +865,32 @@ function boot() {
     buildNodes();
     console.log("[mindmap] buildNodes done");
     drawConnectors();
-    // Centre the root node, scaled to fit the viewport
-    fitToScreen();
+    // Centre the root node nicely in the viewport. Because the
+    // initial `state.expanded` only contains "1", only the root
+    // is visible — we want it large and centered, not zoomed-out.
+    centreRoot();
     updateMinimap();
   } catch (e) {
     console.error("[mindmap] boot error:", e);
   }
+}
+
+/* Centre the root node in the viewport at a comfortable scale
+   (1.2) so it is large and readable. Called on boot and after the
+   user clicks the welcome "Бастау" button. */
+function centreRoot(padding = 40) {
+  const pos = positions.get("1");
+  if (!pos) return;
+  const w = canvasWrap.clientWidth;
+  const h = canvasWrap.clientHeight;
+  if (w <= 0 || h <= 0) return;
+  // Choose a scale that lets the root node fit comfortably with
+  // some breathing room. Root is 240×100 px (see CSS).
+  const targetScale = clamp(1.0, SCALE_MIN, SCALE_MAX);
+  state.scale = targetScale;
+  state.tx = w / 2 - pos.x * state.scale;
+  state.ty = h / 2 - pos.y * state.scale;
+  applyTransform();
 }
 
 /* Fit every currently visible node into the viewport by choosing an
